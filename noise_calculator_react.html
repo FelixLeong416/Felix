@@ -1,0 +1,879 @@
+﻿<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>澳門噪音計算器 (React 版本)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <style>
+        /* 工具提示框的基本樣式 */
+        .tooltip:hover .tooltiptext {
+            visibility: visible;
+            opacity: 1;
+        }
+        /* 分頁按鈕樣式 */
+        .tab-button {
+            padding: 0.5rem 1rem; /* 上下 0.5rem, 左右 1rem */
+            border-bottom: 2px solid transparent; /* 底部邊框透明 */
+            font-weight: 500; /* 字體中等粗細 */
+            color: #6b7280; /* 預設文字顏色 (Tailwind gray-500) */
+            transition: all 0.15s ease-in-out; /* 過渡效果 */
+        }
+        .tab-button.active { /* 選中狀態的按鈕 */
+            border-bottom-color: #3b82f6; /* 底部邊框顏色 (Tailwind blue-500) */
+            color: #3b82f6; /* 文字顏色 (Tailwind blue-500) */
+        }
+        .tab-button:hover:not(.active) { /* 滑鼠懸停在未選中按鈕上 */
+            border-bottom-color: #9ca3af; /* 底部邊框顏色 (Tailwind gray-400) */
+            color: #4b5563; /* 文字顏色 (Tailwind gray-600) */
+        }
+        /* 確保在 PDF 匯出時，內容不會被意外截斷 */
+        @media print {
+            body, html {
+                height: auto !important;
+                overflow: visible !important;
+            }
+            #pdfExportContent, #checkerTabContent, #resultsArea {
+                height: auto !important;
+                overflow: visible !important;
+                page-break-inside: avoid;
+            }
+        }
+        /* 修正 InfoIcon 在某些情況下可能不垂直居中的問題 */
+        .info-icon {
+            display: inline-flex !important;
+            align-items: center;
+            justify-content: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // 從 React 導入 useState, useEffect, useRef
+        const { useState, useEffect, useRef } = React;
+
+        // 信息圖標組件
+        const InfoIcon = () => (
+          <i className="info-icon" style={{
+            display: 'inline-block',
+            width: '16px',
+            height: '16px',
+            backgroundColor: '#3b82f6', // Tailwind blue-500
+            color: 'white',
+            borderRadius: '50%',
+            textAlign: 'center',
+            fontSize: '12px',
+            lineHeight: '16px',
+            cursor: 'help',
+            marginLeft: '4px',
+            fontStyle: 'normal'
+          }}>?</i>
+        );
+
+        // 工具提示組件
+        const Tooltip = ({ text, children }) => (
+          <div className="tooltip" style={{ position: 'relative', display: 'inline-block' }}>
+            {children}
+            <span className="tooltiptext" style={{
+              visibility: 'hidden', // 預設隱藏
+              width: '280px', // 提示框寬度
+              backgroundColor: '#555', // 背景色
+              color: '#fff', // 文字顏色
+              textAlign: 'left', // 文字左對齊
+              borderRadius: '6px', // 圓角
+              padding: '8px', // 內邊距
+              position: 'absolute', // 絕對定位
+              zIndex: 1, // 層級
+              bottom: '125%', // 位置在圖標上方
+              left: '50%', // 水平居中
+              marginLeft: '-140px', // 水平居中偏移
+              opacity: 0, // 預設透明
+              transition: 'opacity 0.3s', // 過渡效果
+              fontSize: '0.8rem' // 字體大小
+            }}>
+              {text}
+            </span>
+          </div>
+        );
+
+        // 彈出式提示框組件
+        const Modal = ({ title, message, isOpen, onClose, isHtmlMessage = true }) => {
+          if (!isOpen) return null; // 如果未打開，則不渲染
+
+          return (
+            <div style={{ // 遮罩層
+              display: 'block', position: 'fixed', zIndex: 1000, left: 0, top: 0,
+              width: '100%', height: '100%', overflow: 'auto', backgroundColor: 'rgba(0,0,0,0.4)'
+            }} onClick={onClose}> {/* 點擊遮罩層關閉 */}
+              <div style={{ // 提示框內容區域
+                backgroundColor: '#fefefe', margin: '10% auto', padding: '20px',
+                border: '1px solid #888', width: '80%', maxWidth: '500px',
+                borderRadius: '8px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+              }} onClick={e => e.stopPropagation()}> {/* 點擊內容區域時防止事件冒泡關閉 */}
+                <div style={{ paddingBottom: '10px', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <h2 className="text-lg font-semibold">{title}</h2>
+                  <span style={{ color: '#aaa', float: 'right', fontSize: '28px', fontWeight: 'bold', cursor: 'pointer' }} onClick={onClose}>&times;</span>
+                </div>
+                <div style={{ paddingTop: '10px', paddingBottom: '10px' }}>
+                  {isHtmlMessage ? <p dangerouslySetInnerHTML={{ __html: message }}></p> : <p>{message}</p>}
+                </div>
+                <div style={{ paddingTop: '10px', borderTop: '1px solid #eee', textAlign: 'right' }}>
+                  <button onClick={onClose} className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">關閉 (Close)</button>
+                </div>
+              </div>
+            </div>
+          );
+        };
+
+        // 噪音檢查器組件
+        const NoiseChecker = ({ showModal, setResultsHTML, setExportButtonsVisible }) => {
+          // 定義各種狀態
+          const [testLocation, setTestLocation] = useState(''); // 檢測地點
+          const [testDate, setTestDate] = useState(''); // 檢測日期
+          const [locationType, setLocationType] = useState('macau'); // 區域類型
+          const [timeOfDay, setTimeOfDay] = useState(''); // 時間 (HH:MM 格式)
+          const [noiseLevel, setNoiseLevel] = useState(''); // 測量噪音值
+          const [measurementSetting, setMeasurementSetting] = useState('outdoor'); // 測量環境
+          const [dayType, setDayType] = useState('weekday'); // 日期類型
+          const [activityType, setActivityType] = useState('residential_works'); // 活動類型
+          
+          // 空調/通風設備專用輸入
+          const [noiseLevelOff, setNoiseLevelOff] = useState(''); // 設備關閉時噪音
+          const [noiseLevelOn, setNoiseLevelOn] = useState(''); // 設備開啟時噪音
+          // 土木建築工程專用輸入
+          const [distanceToSensitive, setDistanceToSensitive] = useState(''); // 與敏感點距離
+          // 露天表演專用輸入
+          const [nearHospitalSchool, setNearHospitalSchool] = useState('no'); // 是否靠近醫院/學校
+          const [hospitalSchoolOperating, setHospitalSchoolOperating] = useState('no'); // 醫院/學校是否運作中
+
+          // 噪音特性調整
+          const [narrowbandNoise, setNarrowbandNoise] = useState(false); // 窄頻噪音
+          const [impulsiveNoise, setImpulsiveNoise] = useState(false); // 脈衝噪音
+
+          // 根據活動類型決定是否顯示通用輸入項
+          const showGeneralInputs = activityType !== 'air_con_ventilation';
+
+          // 當活動類型改變時，重置條件性輸入
+          useEffect(() => {
+            setNoiseLevelOff('');
+            setNoiseLevelOn('');
+            setDistanceToSensitive('');
+            setNearHospitalSchool('no');
+            setHospitalSchoolOperating('no');
+          }, [activityType]);
+
+          // 獲取背景噪音參考值
+          const getBackgroundNoise = (locType, timeInHours, measSetting) => {
+            const isDayTime = timeInHours >= 8 && timeInHours < 20; // 日間定義：早上8點到晚上8點前
+            let outdoorBgNoise;
+            switch (locType) {
+                case 'macau': outdoorBgNoise = isDayTime ? 60 : 53; break;
+                case 'taipa': outdoorBgNoise = isDayTime ? 56 : 50; break;
+                case 'cotai': outdoorBgNoise = isDayTime ? 55 : 48; break;
+                case 'coloane': case 'macau_university_hengqin': outdoorBgNoise = isDayTime ? 50 : 44; break;
+                default: outdoorBgNoise = isDayTime ? 60 : 53; // 預設澳門半島
+            }
+            // 室內測量時，背景噪音減 10dB(A) 作為參考
+            return measSetting === 'indoor' ? outdoorBgNoise - 10 : outdoorBgNoise;
+          };
+
+          // 評估噪音水平的函數
+          const assessNoise = () => {
+            setResultsHTML(''); // 清空舊結果
+            setExportButtonsVisible(false); // 隱藏匯出按鈕
+
+            // 基本輸入驗證
+            if (!testLocation.trim()) {
+                showModal('輸入提示 (Input Required)', '請輸入檢測地點。<br>Please enter Test Location.');
+                return;
+            }
+            if (!testDate) {
+                showModal('輸入提示 (Input Required)', '請選擇檢測日期。<br>Please select Test Date.');
+                return;
+            }
+
+            let currentNoiseLevelNum, currentTimeInHours;
+            let adjustedNoiseLevelNum, adjustmentNote = "";
+            let status = "", limitDesc = "", regulation = "", details = "", icon = "";
+            const disturbingNoiseNote = "澳門第8/2014號法律第二條定義「騷擾噪音」為：由存在於某一地點鄰近處的聲源所發出騷擾他人生活安寧及休息的、或令人難受的，又或超出本法律訂定且按《聲學規定》確定或測定的聲級標準的噪音。即使在非限制時段或未有特定分貝上限的情況下，任何活動均不得產生此類騷擾噪音。<br>Law No. 8/2014, Article 2 defines \"disturbing noise\" as noise from a nearby source that disturbs the peace and rest of others, causes discomfort, or exceeds the sound level standards set by this law and determined or measured according to the \"Acoustic Regulations.\" Even during non-restricted periods or in the absence of a specific decibel limit, no activity shall produce such disturbing noise.";
+            const referenceLimitGeneralWorks = 75; // 一般工程參考限值
+
+            // 處理空調/通風設備的邏輯
+            if (activityType === 'air_con_ventilation') {
+                if (noiseLevelOff === '' || noiseLevelOn === '') {
+                    showModal('輸入提示 (Input Required)', '請輸入空調設備運作前後的測量值。<br>Please enter A/C measurements before and during operation.');
+                    return;
+                }
+                const noiseOffNum = parseFloat(noiseLevelOff);
+                const noiseOnNum = parseFloat(noiseLevelOn);
+                if (isNaN(noiseOffNum) || isNaN(noiseOnNum) || noiseOffNum < 0 || noiseOnNum < 0) {
+                    showModal('輸入錯誤 (Input Error)', '空調設備測量值必須為有效數值。<br>A/C measurements must be valid numbers.');
+                    return;
+                }
+                
+                let adjustedNoiseOn = noiseOnNum; // 調整後的設備運作噪音
+                if (narrowbandNoise && impulsiveNoise) { // 同時存在窄頻和脈衝
+                    adjustedNoiseOn += 8;
+                    adjustmentNote = " (設備運作時噪音已根據窄頻及脈衝特性作 +8dB(A) 調整) (Equipment operating noise adjusted by +8dB(A) for narrowband and impulsive characteristics)";
+                } else if (narrowbandNoise || impulsiveNoise) { // 存在窄頻或脈衝之一
+                    adjustedNoiseOn += 5;
+                    adjustmentNote = ` (設備運作時噪音已根據${narrowbandNoise ? "窄頻" : "脈衝"}特性作 +5dB(A) 調整) (Equipment operating noise adjusted by +5dB(A) for ${narrowbandNoise ? "narrowband" : "impulsive"} characteristics)`;
+                }
+                
+                const difference = adjustedNoiseOn - noiseOffNum; // 差值
+                regulation = "根據第8/2014號法律第六條 及 《聲學規定》 (According to Law No. 8/2014, Article 6 & Acoustic Regulations)";
+                details = `根據法例，空調及通風設備的聲級，不得高於在鄰近該等設備的安裝地點的任何樓宇內所測定的背景噪音聲級（即設備未運作時的噪音）的10dB(A)。此處評估基於您輸入的設備運作前後的兩個測量值。設備開啟時測量值: ${noiseOnNum.toFixed(1)}dB(A)${adjustmentNote}, 設備關閉時背景值: ${noiseOffNum.toFixed(1)}dB(A)。<br>According to the law, the sound level of air conditioning and ventilation equipment shall not be 10dB(A) higher than the background noise level (i.e., noise when the equipment is not operating) measured inside any building near the installation site of such equipment. This assessment is based on the two measurement values you entered for before and after the equipment operation. Equipment ON measurement: ${noiseOnNum.toFixed(1)}dB(A)${adjustmentNote}, Equipment OFF background value: ${noiseOffNum.toFixed(1)}dB(A).`;
+
+                if (difference > 10) {
+                    status = "超出標準 (Exceeds Standard)"; icon = '❌';
+                    limitDesc = `設備運作時噪音較背景噪音高出 ${difference.toFixed(1)}dB(A)。標準上限為高出10dB(A)。<br>Operating noise is ${difference.toFixed(1)}dB(A) higher than background noise. The standard limit is not to exceed by more than 10dB(A).`;
+                } else {
+                    status = "符合標準 (Meets Standard)"; icon = '✅';
+                    limitDesc = `設備運作時噪音較背景噪音高出 ${difference.toFixed(1)}dB(A)。符合不高於10dB(A)的標準。<br>Operating noise is ${difference.toFixed(1)}dB(A) higher than background noise. Meets the standard of not exceeding by more than 10dB(A).`;
+                }
+                adjustedNoiseLevelNum = difference; // 用於比較的調整後值
+                currentNoiseLevelNum = noiseOnNum; // 用於顯示的原始開啟時噪音
+
+            } else { // 其他活動類型的邏輯
+                if (noiseLevel === '') {
+                    showModal('輸入提示 (Input Required)', '請輸入測量噪音值 (dB(A))。<br>Please enter Measured Noise Level (dB(A)).');
+                    return;
+                }
+                currentNoiseLevelNum = parseFloat(noiseLevel);
+                if (isNaN(currentNoiseLevelNum) || currentNoiseLevelNum < 0) {
+                    showModal('輸入錯誤 (Input Error)', '請為「測量噪音值」輸入有效的數值。<br>Please enter a valid value for "Measured Noise Level".');
+                    return;
+                }
+
+                if (!timeOfDay) {
+                    showModal('輸入提示 (Input Required)', '請輸入時間。<br>Please enter Time.');
+                    return;
+                }
+                const timeParts = timeOfDay.split(':');
+                if (timeParts.length !== 2) {
+                    showModal('輸入錯誤 (Input Error)', '時間格式無效，請使用 HH:MM 格式。<br>Invalid time format. Please use HH:MM.');
+                    return;
+                }
+                currentTimeInHours = parseInt(timeParts[0], 10);
+                const minutes = parseInt(timeParts[1], 10);
+                if (isNaN(currentTimeInHours) || currentTimeInHours < 0 || currentTimeInHours > 23 || isNaN(minutes) || minutes < 0 || minutes > 59) {
+                    showModal('輸入錯誤 (Input Error)', '請為「時間」輸入有效的數值 (HH:MM)。<br>Please enter a valid value for "Time" (HH:MM).');
+                    return;
+                }
+
+                adjustedNoiseLevelNum = currentNoiseLevelNum; // 調整後的噪音水平
+                if (narrowbandNoise && impulsiveNoise) {
+                    adjustedNoiseLevelNum += 8;
+                    adjustmentNote = " (已根據窄頻及脈衝特性作 +8dB(A) 調整) (Adjusted by +8dB(A) for narrowband and impulsive characteristics)";
+                } else if (narrowbandNoise || impulsiveNoise) {
+                    adjustedNoiseLevelNum += 5;
+                    adjustmentNote = ` (已根據${narrowbandNoise ? "窄頻" : "脈衝"}特性作 +5dB(A) 調整) (Adjusted by +5dB(A) for ${narrowbandNoise ? "narrowband" : "impulsive"} characteristics)`;
+                }
+                
+                const isSundayOrPH = dayType === 'sunday' || dayType === 'public_holiday'; // 是否星期日或公眾假期
+                // const isEveOfPHOrSaturday = dayType === 'saturday' || dayType === 'eve_public_holiday'; // 是否星期六或公眾假期前夕
+                // const isWeekdayForConstruction = (dayType === 'weekday' || dayType === 'saturday') && !isSundayOrPH; // 是否建築工程的工作日
+
+                // 根據活動類型進行評估
+                switch (activityType) {
+                    case 'residential_works': // 住宅樓宇中的更改、保養及維修工程
+                        regulation = "根據第8/2014號法律第三條 及相關指引 (According to Law No. 8/2014, Article 3 & relevant guidelines)";
+                        if (isSundayOrPH || (currentTimeInHours >= 19 || currentTimeInHours < 9)) { // 限制時段
+                             status = "活動受限 (Activity Restricted)";
+                             limitDesc = "此時段禁止進行產生騷擾噪音的工程 (Generating disturbing noise from works is prohibited during this period)";
+                             details = "在星期日及公眾假期的全日以及平日或星期六或公眾假期前夕的十九時至翌日九時的時段，不得在住宅樓宇進行任何可產生騷擾噪音的更改、保養及維修工程。<br>No alteration, maintenance, or repair works generating disturbing noise are allowed in residential buildings on Sundays and public holidays (all day), and on weekdays, Saturdays, or eves of public holidays from 19:00 to 09:00 the next day.";
+                             icon = '🚫';
+                        } else { // 非限制時段
+                            if (adjustedNoiseLevelNum > referenceLimitGeneralWorks) {
+                                status = "超出參考標準 (Exceeds Reference Standard)"; icon = '❌';
+                            } else {
+                                status = "符合參考標準 (Meets Reference Standard)"; icon = '✅';
+                            }
+                            limitDesc = `參考上限: ${referenceLimitGeneralWorks}dB(A) (根據指引) (Reference Limit: ${referenceLimitGeneralWorks}dB(A) (per guidelines))`;
+                            details = `在許可時段內，雖法律未對住宅工程設通用分貝限值，但環境保護局《環境監察與審核指引》中對非樁基礎工程有${referenceLimitGeneralWorks}dB(A) (Leq, 30分鐘)的建議限值可作參考。${disturbingNoiseNote}`;
+                        }
+                        break;
+                    case 'piling_works': // 打樁工程
+                        regulation = "根據第8/2014號法律第四條第一、二款 (According to Law No. 8/2014, Article 4, Paras. 1 & 2)";
+                        if (isSundayOrPH || (currentTimeInHours >= 20 || currentTimeInHours < 8) ) { // 限制時段
+                            status = "活動受限 (Activity Restricted)";
+                            limitDesc = "此時段禁止進行打樁工程 (Piling works are prohibited during this period)";
+                            details = "在星期日及公眾假期的全日以及平日或星期六或公眾假期前夕的二十時至翌日八時的時段，不得進行任何打樁工程。<br>No piling works are allowed on Sundays and public holidays (all day), and on weekdays, Saturdays, or eves of public holidays from 20:00 to 08:00 the next day.";
+                            icon = '🚫';
+                        } else { // 非限制時段
+                            const limit = 85;
+                            if (adjustedNoiseLevelNum > limit) { status = "超出標準 (Exceeds Standard)"; icon = '❌'; }
+                            else { status = "符合標準 (Meets Standard)"; icon = '✅'; }
+                            limitDesc = `標準上限: ${limit}dB(A) (Leq, 20分鐘) (Standard Limit: ${limit}dB(A) (Leq, 20 minutes))`;
+                            details = `在許可時段內進行打樁工程, 不得超出二十分鐘等效連續聲級 (Leq) ${limit}dB(A) 的標準。同時禁止使用撞擊式柴油錘、氣動錘及蒸氣錘打樁機 (除非獲特別豁免)。<br>During permitted hours, piling works shall not exceed an equivalent continuous sound level (Leq) of ${limit}dB(A) for 20 minutes. The use of impact diesel hammers, pneumatic hammers, and steam hammers for piling is also prohibited (unless specifically exempted).`;
+                        }
+                        break;
+                    case 'construction_machinery': // 土木建築工程及工作所使用的設備 (非打樁)
+                        regulation = "根據第8/2014號法律第五條 (According to Law No. 8/2014, Article 5)";
+                        let limitConstruction = 75; // 預設限值
+                        let distanceNote = "";
+                        const distNum = parseFloat(distanceToSensitive);
+
+                        if (isNaN(distNum) || distNum <= 0) {
+                             showModal('輸入提示 (Input Required)', '請為「與最近的住宅樓宇或醫院的距離」輸入有效的正數值。<br>Please enter a valid positive value for "Distance to nearest residential building or hospital".');
+                             return;
+                        }
+
+                        if (distNum > 150) { limitConstruction = 75; }
+                        else if (distNum > 100) { limitConstruction = 70; }
+                        else if (distNum > 50) { limitConstruction = 65; }
+                        else { limitConstruction = 60; }
+                        distanceNote = ` (距離敏感點 ${distNum.toFixed(0)} 米) (Distance to sensitive point ${distNum.toFixed(0)}m)`;
+
+                        if (isSundayOrPH || (currentTimeInHours >= 20 || currentTimeInHours < 8)) { // 限制時段
+                            status = "活動受限 (Activity Restricted)";
+                            limitDesc = "此時段禁止進行產生騷擾噪音的工程 (Generating disturbing noise from works is prohibited during this period)";
+                            details = `在星期日及公眾假期的全日以及平日或星期六或公眾假期前夕的二十時至翌日八時的時段，不得進行任何產生騷擾噪音的土木建築工程及工作。${disturbingNoiseNote}<br>No civil construction works generating disturbing noise are allowed on Sundays and public holidays (all day), and on weekdays, Saturdays, or eves of public holidays from 20:00 to 08:00 the next day.`;
+                            icon = '🚫';
+                        } else { // 非限制時段
+                            if (adjustedNoiseLevelNum > limitConstruction) { status = "超出標準 (Exceeds Standard)"; icon = '❌'; }
+                            else { status = "符合標準 (Meets Standard)"; icon = '✅'; }
+                            limitDesc = `標準上限: ${limitConstruction}dB(A)${distanceNote} (Leq, 30分鐘) (Standard Limit: ${limitConstruction}dB(A)${distanceNote} (Leq, 30 minutes))`;
+                            details = `在許可時段內，土木建築工程及工作所使用的設備發出的噪音，在距離受體所處的建築物外牆1米處測量，不應超出相應的限值。${disturbingNoiseNote}`;
+                        }
+                        break;
+                    case 'residential_daily_life': // 住宅樓宇中的日常生活活動及寵物
+                        regulation = "根據第8/2014號法律第七條 (According to Law No. 8/2014, Article 7)";
+                        if (currentTimeInHours >= 22 || currentTimeInHours < 8) { // 限制時段 (晚上10點至翌日早上8點)
+                            status = "活動需注意 (Activity Requires Attention)";
+                            limitDesc = "此時段禁止產生騷擾噪音 (Generating disturbing noise is prohibited during this period)";
+                            details = `在晚上二十二時至翌日早上八時的時段，禁止在住宅樓宇內進行任何產生騷擾鄰居的噪音的活動，尤其包括家庭娛樂、使用樂器或寵物發出的噪音。${disturbingNoiseNote}<br>From 22:00 to 08:00 the next day, any activity generating noise that disturbs neighbors is prohibited in residential buildings, especially including family entertainment, use of musical instruments, or noise from pets.`;
+                            icon = '🤫';
+                        } else { // 非限制時段
+                            status = "一般活動時段 (General Activity Period)";
+                            limitDesc = "任何時候均不得產生騷擾噪音 (Disturbing noise should not be generated at any time)";
+                            details = `即使在非限制時段，住宅樓宇內的日常生活活動及寵物亦不應產生騷擾鄰居的噪音。${disturbingNoiseNote}`;
+                            icon = '🏠';
+                        }
+                        // 對於此類活動，通常不設具體分貝限值，而是基於是否構成「騷擾」。
+                        // 如果使用者輸入了噪音值，可以給出一個參考性的提示。
+                        if (adjustedNoiseLevelNum > 55 && (currentTimeInHours >= 22 || currentTimeInHours < 8)) { // 假設夜間超過55dB(A)可能構成騷擾
+                            details += "<br>您輸入的噪音值在夜間可能較易構成騷擾，請注意。 (The noise level you entered might easily constitute a disturbance at night, please be mindful.)";
+                        } else if (adjustedNoiseLevelNum > 65) { // 假設日間超過65dB(A)可能構成騷擾
+                             details += "<br>您輸入的噪音值在日間也可能構成騷擾，請注意。 (The noise level you entered might also constitute a disturbance during the day, please be mindful.)";
+                        }
+                        break;
+                    case 'outdoor_entertainment': // 露天表演、娛樂及類似活動
+                        regulation = "根據第8/2014號法律第八條 (According to Law No. 8/2014, Article 8)";
+                        let limitEntertainment = 65; // 預設限值
+                        let hospitalSchoolNote = "";
+                        if (nearHospitalSchool === 'yes' && hospitalSchoolOperating === 'yes') {
+                            limitEntertainment = 55;
+                            hospitalSchoolNote = " (鄰近運作中醫院/學校) (Near operating hospital/school)";
+                        }
+
+                        if (currentTimeInHours >= 22 || currentTimeInHours < 10) { // 限制時段 (晚上10點至翌日早上10點)
+                            status = "活動受限 (Activity Restricted)";
+                            limitDesc = "此時段禁止進行此類活動 (Such activities are prohibited during this period)";
+                            details = `在晚上二十二時至翌日早上十時的時段，禁止進行任何露天表演、娛樂及類似活動。${disturbingNoiseNote}<br>From 22:00 to 10:00 the next day, all outdoor performances, entertainment, and similar activities are prohibited.`;
+                            icon = '🚫';
+                        } else { // 非限制時段
+                            if (adjustedNoiseLevelNum > limitEntertainment) { status = "超出標準 (Exceeds Standard)"; icon = '❌'; }
+                            else { status = "符合標準 (Meets Standard)"; icon = '✅'; }
+                            limitDesc = `標準上限: ${limitEntertainment}dB(A)${hospitalSchoolNote} (Leq, 5分鐘) (Standard Limit: ${limitEntertainment}dB(A)${hospitalSchoolNote} (Leq, 5 minutes))`;
+                            details = `在許可時段內，露天表演、娛樂及類似活動發出的噪音，在距離受體所處的建築物外牆1米處測量，不應超出相應的限值。${disturbingNoiseNote}`;
+                        }
+                        break;
+                    case 'industrial_commercial': // 工業、商業或服務業單位的運作
+                        regulation = "根據第8/2014號法律第九條 (According to Law No. 8/2014, Article 9)";
+                        const bgNoiseInd = getBackgroundNoise(locationType, currentTimeInHours, measurementSetting);
+                        const limitInd = bgNoiseInd + 10;
+                        if (adjustedNoiseLevelNum > limitInd) { status = "超出標準 (Exceeds Standard)"; icon = '❌'; } 
+                        else { status = "符合標準 (Meets Standard)"; icon = '✅'; }
+                        
+                        // 嘗試獲取下拉選單的顯示文本
+                        let locationDisplayNameInd = locationType;
+                        let measurementSettingDisplayInd = measurementSetting;
+                        try {
+                            const locationTypeSelect = document.getElementById('locationType');
+                            const measurementSettingSelect = document.getElementById('measurementSetting');
+                            if (locationTypeSelect) locationDisplayNameInd = locationTypeSelect.options[locationTypeSelect.selectedIndex].text;
+                            if (measurementSettingSelect) measurementSettingDisplayInd = measurementSettingSelect.options[measurementSettingSelect.selectedIndex].text;
+                        } catch (e) {
+                            console.warn("無法獲取下拉選單的顯示文本: ", e);
+                        }
+
+                        limitDesc = `標準上限: 參考背景噪音 (${bgNoiseInd.toFixed(1)}dB(A)) + 10dB(A) = ${limitInd.toFixed(1)}dB(A) (Standard Limit: Reference Background Noise (${bgNoiseInd.toFixed(1)}dB(A)) + 10dB(A) = ${limitInd.toFixed(1)}dB(A))`;
+                        details = `工業、商業或服務業單位的運作，所發出的噪音的A計權等效連續聲級值與在參考期間的百分之九十五的時間內(L95)的背景噪音聲級值之差不得高於10dB(A)。<br><strong>重要提示：</strong>法規要求的標準測量方法是比較設備運作時的噪音與設備<strong class="text-red-600">停止運作時的實際背景噪音(L95)</strong>之差額。本工具使用的是根據區域類型(${locationDisplayNameInd})、時間(${currentTimeInHours}:00-${currentTimeInHours+1}:00)及測量環境(${measurementSettingDisplayInd})估算的<strong class="text-red-600">參考背景噪音值(Leq)</strong>進行簡化評估，結果僅供初步參考。新單位設立或現存單位擴展亦不得產生騷擾噪音。${disturbingNoiseNote}`;
+                        break;
+                    case 'public_place_activity': // 公共地方的活動
+                        regulation = "根據第8/2014號法律第十條 (According to Law No. 8/2014, Article 10)";
+                        status = "一般規定 (General Provision)";
+                        limitDesc = "任何時候均不得產生騷擾噪音 (Disturbing noise should not be generated at any time)";
+                        details = `在公共地方進行的任何活動所發出的噪音，均不得騷擾他人。${disturbingNoiseNote}<br>Noise from any activity carried out in public places must not disturb others.`;
+                        icon = '🏞️';
+                        // 此類活動同樣基於是否構成「騷擾」
+                        if (adjustedNoiseLevelNum > 65) { // 假設超過65dB(A)可能構成騷擾
+                             details += "<br>您輸入的噪音值在公共地方可能較易構成騷擾，請注意。 (The noise level you entered might easily constitute a disturbance in public places, please be mindful.)";
+                        }
+                        break;
+                    default:
+                        status = "評估邏輯待實現 (Assessment Logic Pending)";
+                        icon = '❓';
+                        details = `活動類型 "${activityType}" 的詳細評估邏輯尚未完全移植到此React版本。${disturbingNoiseNote}`;
+                        limitDesc = "N/A";
+                }
+            }
+
+            // 根據狀態設定結果的顏色
+            let statusColorClass = "text-gray-700 bg-gray-100"; // 預設顏色
+            if (status.includes("超出標準") || status.includes("活動受限") || status.includes("Exceeds")) {
+                statusColorClass = "text-red-700 bg-red-100"; // 紅色，表示超出或受限
+            } else if (status.includes("符合標準") || status.includes("Meets")) {
+                statusColorClass = "text-green-700 bg-green-100"; // 綠色，表示符合
+            } else if (status.includes("需注意") || status.includes("Attention") || status.includes("一般活動時段") || status.includes("一般規定")) {
+                statusColorClass = "text-yellow-700 bg-yellow-100"; // 黃色，表示需注意或一般情況
+            }
+
+            // 準備顯示的噪音值文本
+            let displayedNoiseLevelText = "";
+            if (activityType === 'air_con_ventilation') {
+                // 對於空調，顯示原始開啟值和調整說明
+                const originalNoiseOn = parseFloat(noiseLevelOn || 0);
+                displayedNoiseLevelText = `${originalNoiseOn.toFixed(1)}dB(A)`;
+                if (adjustmentNote) {
+                     displayedNoiseLevelText += adjustmentNote.replace(' (設備運作時噪音已根據', ' (已根據').replace(') (Equipment operating noise adjusted by', ') (Adjusted by');
+                } else {
+                    displayedNoiseLevelText += " (設備運作時 / Equipment ON)";
+                }
+            } else {
+                // 其他活動，顯示調整後的噪音值，如果調整過，也顯示原始值和調整說明
+                if (typeof currentNoiseLevelNum !== 'undefined' && !isNaN(currentNoiseLevelNum)) {
+                    if (adjustmentNote && currentNoiseLevelNum.toFixed(1) !== adjustedNoiseLevelNum.toFixed(1)) {
+                        displayedNoiseLevelText = `${currentNoiseLevelNum.toFixed(1)}dB(A)${adjustmentNote}`;
+                    } else {
+                         displayedNoiseLevelText = `${adjustedNoiseLevelNum.toFixed(1)}dB(A)`;
+                         if (adjustmentNote) displayedNoiseLevelText += adjustmentNote; // 如果調整後值與原始值相同但仍有調整，顯示調整說明
+                    }
+                } else {
+                    displayedNoiseLevelText = "N/A";
+                }
+            }
+            
+            // 產生結果的 HTML 內容
+            const resultsContent = `
+                <div class="${statusColorClass} p-4 rounded-md shadow">
+                    <h3 class="text-xl font-semibold mb-2"><span class="text-2xl mr-2">${icon}</span> ${status}</h3>
+                    <p class="text-sm"><strong>${activityType === 'air_con_ventilation' ? '評估相關值 (Assessed Value)' : '測量噪音值 (Measured Noise Level)'}:</strong> ${displayedNoiseLevelText}</p>
+                    <p class="text-sm"><strong>適用標準/狀況 (Applicable Standard/Condition):</strong> ${limitDesc}</p>
+                </div>
+                <div class="mt-4 p-4 border border-gray-300 rounded-md bg-white">
+                    <h4 class="font-semibold text-gray-800">詳細說明及法規依據 (Details & Regulatory Basis):</h4>
+                    <p class="text-sm text-gray-600 mt-1">${regulation}</p>
+                    <p class="text-sm text-gray-600 mt-1">${details}</p>
+                </div>
+                <p class="text-xs text-gray-500 mt-4">免責聲明：本工具根據提供的法規文件進行信息整合和計算，結果僅供參考，不能替代專業法律意見或環境保護局的官方解釋。所有噪音管制應以澳門現行有效法律及官方指引為準。<br>Disclaimer: This tool integrates and calculates information based on the provided regulatory documents. The results are for reference only and cannot replace professional legal advice or official interpretations by the Environmental Protection Bureau (DSPA). All noise control should be based on the current effective laws and official guidelines of Macau.</p>
+            `;
+            setResultsHTML(resultsContent); // 更新結果顯示
+            setExportButtonsVisible(true); // 顯示匯出按鈕
+          };
+
+
+          // 返回組件的 JSX 結構
+          return (
+            <div className="space-y-6">
+              {/* 基本信息輸入 */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label htmlFor="testLocation" className="block text-sm font-medium text-gray-700">檢測地點 (Test Location)</label>
+                  <input type="text" id="testLocation" value={testLocation} onChange={e => setTestLocation(e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" placeholder="請輸入具體檢測地點" />
+                </div>
+                <div>
+                  <label htmlFor="testDate" className="block text-sm font-medium text-gray-700">檢測日期 (Test Date)</label>
+                  <input type="date" id="testDate" value={testDate} onChange={e => setTestDate(e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
+                </div>
+              </div>
+
+              {/* 通用輸入項 (當非空調類型時顯示) */}
+              {showGeneralInputs && (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <label htmlFor="locationType" className="block text-sm font-medium text-gray-700">區域類型 (Area Type)</label>
+                      <select id="locationType" value={locationType} onChange={e => setLocationType(e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                        <option value="macau">澳門半島 (Macau Peninsula)</option>
+                        <option value="taipa">氹仔 (Taipa)</option>
+                        <option value="cotai">路氹填海區 (Cotai)</option>
+                        <option value="coloane">路環 (Coloane)</option>
+                        <option value="macau_university_hengqin">澳門大學 (橫琴) (University of Macau (Hengqin))</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor="timeOfDay" className="block text-sm font-medium text-gray-700">時間 (Time)</label>
+                      <input type="time" id="timeOfDay" value={timeOfDay} onChange={e => setTimeOfDay(e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <label htmlFor="noiseLevel" className="block text-sm font-medium text-gray-700">測量噪音值 (dB(A))</label>
+                      <input type="number" id="noiseLevel" value={noiseLevel} onChange={e => setNoiseLevel(e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" placeholder="例如: 75" />
+                    </div>
+                    <div>
+                      <label htmlFor="measurementSetting" className="block text-sm font-medium text-gray-700">測量環境 (Measurement Setting)</label>
+                      <select id="measurementSetting" value={measurementSetting} onChange={e => setMeasurementSetting(e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                        <option value="outdoor">室外 (Outdoor)</option>
+                        <option value="indoor">室內 (Indoor)</option>
+                      </select>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* 日期類型 */}
+              <div>
+                <label htmlFor="dayType" className="block text-sm font-medium text-gray-700">日期類型 (Day Type)</label>
+                <select id="dayType" value={dayType} onChange={e => setDayType(e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                    <option value="weekday">平日 (星期一至五) (Weekday (Mon-Fri))</option>
+                    <option value="saturday">星期六 (Saturday)</option>
+                    <option value="sunday">星期日 (Sunday)</option>
+                    <option value="public_holiday">公眾假期 (Public Holiday)</option>
+                    <option value="eve_public_holiday">公眾假期前夕 (非星期六) (Eve of Public Holiday (not Sat))</option>
+                </select>
+              </div>
+
+              {/* 活動類型 */}
+              <div>
+                <label htmlFor="activityType" className="block text-sm font-medium text-gray-700">活動類型 (Activity Type)</label>
+                <select id="activityType" value={activityType} onChange={e => setActivityType(e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                    <option value="residential_works">住宅樓宇中的更改、保養及維修工程</option>
+                    <option value="piling_works">打樁工程</option>
+                    <option value="construction_machinery">土木建築工程及工作所使用的設備 (非打樁)</option>
+                    <option value="air_con_ventilation">空調及通風設備</option>
+                    <option value="residential_daily_life">住宅樓宇中的日常生活活動及寵物</option>
+                    <option value="outdoor_entertainment">露天表演、娛樂及類似活動</option>
+                    <option value="industrial_commercial">工業、商業或服務業單位的運作</option>
+                    <option value="public_place_activity">公共地方的活動</option>
+                </select>
+              </div>
+
+              {/* 條件性輸入項：空調/通風設備 */}
+              {activityType === 'air_con_ventilation' && (
+                <div className="space-y-4 p-4 border border-blue-200 rounded-md bg-blue-50">
+                  <p className="text-sm text-blue-700">請輸入空調/通風設備運作前（背景噪音）及運作時的測量值：</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <label htmlFor="noiseLevelOff" className="block text-sm font-medium text-gray-700">設備沒有開啟時測量值 (dB(A))</label>
+                      <input type="number" id="noiseLevelOff" value={noiseLevelOff} onChange={e => setNoiseLevelOff(e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" placeholder="背景噪音" />
+                    </div>
+                    <div>
+                      <label htmlFor="noiseLevelOn" className="block text-sm font-medium text-gray-700">設備已開啟時測量值 (dB(A))</label>
+                      <input type="number" id="noiseLevelOn" value={noiseLevelOn} onChange={e => setNoiseLevelOn(e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" placeholder="設備運作噪音" />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 條件性輸入項：土木建築工程 (非打樁) */}
+              {activityType === 'construction_machinery' && (
+                <div className="p-4 border border-blue-200 rounded-md bg-blue-50">
+                  <label htmlFor="distanceToSensitive" className="block text-sm font-medium text-gray-700">與最近的住宅樓宇或醫院的距離 (米)</label>
+                  <input type="number" id="distanceToSensitive" value={distanceToSensitive} onChange={e => setDistanceToSensitive(e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" placeholder="例如: 150" />
+                </div>
+              )}
+
+              {/* 條件性輸入項：露天表演 */}
+              {activityType === 'outdoor_entertainment' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-4 border border-blue-200 rounded-md bg-blue-50">
+                    <div>
+                        <label htmlFor="nearHospitalSchool" className="block text-sm font-medium text-gray-700">是否在醫院或學校200米範圍內?</label>
+                        <select id="nearHospitalSchool" value={nearHospitalSchool} onChange={e => setNearHospitalSchool(e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                            <option value="no">否 (No)</option>
+                            <option value="yes">是 (Yes)</option>
+                        </select>
+                    </div>
+                    {nearHospitalSchool === 'yes' && ( // 僅當選擇“是”時顯示
+                        <div>
+                            <label htmlFor="hospitalSchoolOperating" className="block text-sm font-medium text-gray-700">醫院/學校是否運作中?</label>
+                            <select id="hospitalSchoolOperating" value={hospitalSchoolOperating} onChange={e => setHospitalSchoolOperating(e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                                <option value="no">否 (No)</option>
+                                <option value="yes">是 (Yes)</option>
+                            </select>
+                        </div>
+                    )}
+                </div>
+              )}
+
+              {/* 噪音特性調整 */}
+              <div className="p-4 border border-gray-200 rounded-md">
+                <label className="block text-sm font-medium text-gray-700">噪音特性調整 (Noise Characteristics Adjustment)</label>
+                <p className="text-xs text-gray-500 mb-2">若測量的噪音具有以下特性，請勾選。這將根據《聲學規定》對測量值進行調整。</p>
+                <div className="mt-2 space-y-2">
+                  <div className="flex items-center">
+                    <input id="narrowbandNoise" type="checkbox" checked={narrowbandNoise} onChange={e => setNarrowbandNoise(e.target.checked)} className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+                    <label htmlFor="narrowbandNoise" className="ml-2 block text-sm text-gray-900">
+                      窄頻噪音 (Narrowband)
+                      <Tooltip text={<span dangerouslySetInnerHTML={{__html: "指噪音能量集中在特定的頻率範圍，聽感上可能較為單調或尖銳，例如某些機器持續發出的特定音調。(根據《聲學規定》1.5)<br><br>Noise energy is concentrated in specific frequency bands, potentially sounding monotonous or piercing, e.g., a specific tone from machinery. (Per Acoustic Reg. 1.5)"}}/>}>
+                        <InfoIcon />
+                      </Tooltip>
+                    </label>
+                  </div>
+                  <div className="flex items-center">
+                    <input id="impulsiveNoise" type="checkbox" checked={impulsiveNoise} onChange={e => setImpulsiveNoise(e.target.checked)} className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+                    <label htmlFor="impulsiveNoise" className="ml-2 block text-sm text-gray-900">
+                      脈衝噪音 (Impulsive)
+                       <Tooltip text={<span dangerouslySetInnerHTML={{__html: "指突然發生、持續時間短促且強度較高的聲音，例如打鐵聲、物件撞擊聲或短促的敲擊樂聲等。(根據《聲學規定》1.6)<br><br>Sudden, short-duration, high-intensity sound, e.g., hammering, impact sounds, or short percussion. (Per Acoustic Reg. 1.6)"}}/>}>
+                        <InfoIcon />
+                      </Tooltip>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* 評估按鈕 */}
+              <button onClick={assessNoise} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-md focus:outline-none focus:shadow-outline transition duration-150 ease-in-out">
+                評估噪音水平 (Assess Noise Level)
+              </button>
+            </div>
+          );
+        };
+
+        // 儀器放置指引組件
+        const PlacementGuide = () => (
+          <div className="space-y-4 text-sm text-gray-700">
+            <h2 className="text-xl font-semibold text-gray-800">噪音儀器放置一般指引 (General Guide for Noise Meter Placement)</h2>
+            <p className="text-gray-600">以下指引根據澳門第248/2014號行政長官批示附件《聲學規定》及相關實務經驗總結：<br/>The following guidelines are summarized based on the "Acoustic Regulations" (Annex to Chief Executive Dispatch No. 248/2014) and relevant practical experience:</p>
+            
+            <div className="space-y-3 p-4 bg-gray-50 rounded-md border">
+              <div>
+                <h3 className="font-semibold text-gray-700">一般原則 (General Principles)：</h3>
+                <ul className="list-disc list-inside text-gray-600 pl-4">
+                  <li>應在發現騷擾噪音的地點測量聲級。 (Sound level should be measured at the location where disturbing noise is perceived.)</li>
+                  <li>測量前後均應對噪音測量儀器進行校正，讀數誤差超過1dB的測量結果視為無效。 (The noise meter should be calibrated before and after measurements; results with a reading error exceeding 1dB are considered invalid.)</li>
+                  <li>避免在有霧、雨、雷暴、平均風速超過5m/s或陣風超過10m/s的大氣條件下進行測量。 (Avoid measurements in atmospheric conditions of fog, rain, thunderstorms, average wind speed exceeding 5m/s, or gusts exceeding 10m/s.)</li>
+                  <li>採取預防措施以避免出現任何與測量噪音無關的噪音（如風產生的噪音）。 (Take precautions to avoid any noise unrelated to the noise being measured (e.g., wind noise).)</li>
+                </ul>
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-700">室外測量 (Outdoor Measurement)：</h3>
+                <ul className="list-disc list-inside text-gray-600 pl-4">
+                  <li>距離建築物外牆1米。 (1 meter from the external wall of the building.)</li>
+                  <li>距離地面1.2米至1.5米的高度。 (At a height of 1.2 to 1.5 meters above the ground.)</li>
+                  <li>噪音測量儀器的麥克風應配有防風罩。 (The microphone of the noise meter should be equipped with a windscreen.)</li>
+                  <li>如不能遵循上述測量條件，應按適當方式調整測量方法。 (If the above conditions cannot be met, the measurement method should be adjusted appropriately.)</li>
+                </ul>
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-700">室內測量 (Indoor Measurement)：</h3>
+                <ul className="list-disc list-inside text-gray-600 pl-4">
+                  <li>距離牆壁、天花或地板最少0.5米。 (At least 0.5 meters from walls, ceiling, or floor.)</li>
+                  <li>距離單位通向外部的部份（如窗戶）最少1米。 (At least 1 meter from any opening of the unit to the outside (e.g., windows).)</li>
+                  <li>如條件許可，可同時放置3台噪音測量儀器，位置應至少互相距離0.7米，並取得至少3個位置的讀數。 若空間不足，應在確保儀器間距0.7米的條件下調整數量。 (If conditions permit, 3 noise meters may be placed simultaneously, at least 0.7 meters apart from each other, and readings from at least 3 positions should be obtained. If space is insufficient, the number of meters should be adjusted while ensuring a 0.7-meter distance between them.)</li>
+                </ul>
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-700">特定活動的放置指引 (Placement Guide for Specific Activities)：</h3>
+                <p className="text-gray-600"><strong className="text-gray-700">打樁工程 (Piling Works)：</strong>測量應在距離受體所處的建築物外牆1米處進行。 (Measurement should be taken 1 meter from the external wall of the building where the receiver is located.)</p>
+                <p className="text-gray-600"><strong className="text-gray-700">空調及通風設備 (Air Conditioning & Ventilation Equipment)：</strong>在受該等設備噪音影響的任何樓宇內部進行測量。 (Measurement should be taken inside any building affected by the noise from such equipment.)</p>
+                <p className="text-gray-600">其他活動類型，請參考上述一般室內或室外測量指引，並以最能反映噪音對受體影響的位置為準。<br/>(For other activity types, please refer to the general indoor or outdoor measurement guidelines above, and choose the location that best reflects the noise impact on the receiver.)</p>
+              </div>
+            </div>
+            <p className="text-xs text-gray-500 mt-4">注意：本指引僅供參考，實際操作應嚴格遵守澳門現行法律法規及《聲學規定》的詳細條文。如有疑問，建議諮詢專業人士或環境保護局。<br/>Note: This guide is for reference only. Actual operation should strictly comply with the detailed provisions of current Macau laws, regulations, and the "Acoustic Regulations." If in doubt, consult professionals or the Environmental Protection Bureau (DSPA).</p>
+          </div>
+        );
+
+        // 主應用程式組件 App
+        function App() {
+          const [activeTab, setActiveTab] = useState('checker'); // 當前活動的分頁 ('checker' 或 'placement')
+          const [modalInfo, setModalInfo] = useState({ isOpen: false, title: '', message: '', isHtml: true }); // 彈出框信息
+          const [resultsHTML, setResultsHTML] = useState(''); // 評估結果的 HTML
+          const [exportButtonsVisible, setExportButtonsVisible] = useState(false); // 是否顯示匯出按鈕
+          
+          const pdfExportRootRef = useRef(null); // 用於 PDF 匯出的根元素參照
+
+          // 顯示彈出框的函數
+          const showAppModal = (title, message, isHtml = true) => {
+            setModalInfo({ isOpen: true, title, message, isHtml });
+          };
+          // 關閉彈出框的函數
+          const closeAppModal = () => {
+            setModalInfo({ isOpen: false, title: '', message: '', isHtml: true });
+          };
+
+          // 匯出 PDF 的函數
+          const exportPDF = () => {
+            if (!resultsHTML) { // 如果沒有結果，提示用戶
+              showAppModal('錯誤 (Error)', '請先評估噪音水平以生成結果報告。<br>Please assess noise level first to generate results report.');
+              return;
+            }
+          
+            const elementToCapture = pdfExportRootRef.current.querySelector('#pdfExportContent'); // 要擷取的內容區域
+            const exportButtons = pdfExportRootRef.current.querySelector('#exportButtonsContainer'); // 匯出按鈕容器
+          
+            if (!elementToCapture) {
+              showAppModal('錯誤 (Error)', '無法找到用於匯出PDF的內容區域。<br>Cannot find content area for PDF export.');
+              return;
+            }
+          
+            // 儲存原始樣式，以便稍後恢復
+            const originalDisplayButtons = exportButtons ? exportButtons.style.display : '';
+            const originalElementStyleCssText = elementToCapture.style.cssText;
+          
+            if (exportButtons) exportButtons.style.display = 'none'; // 匯出時隱藏按鈕
+          
+            // 為了更好的 PDF 擷取效果，臨時調整樣式
+            // 確保內容不會被父容器的 overflow:hidden 截斷
+            let parent = elementToCapture.parentElement;
+            const originalParentStyles = [];
+            while(parent && parent !== document.body) {
+                originalParentStyles.push({el: parent, overflow: parent.style.overflow, height: parent.style.height});
+                parent.style.overflow = 'visible';
+                parent.style.height = 'auto';
+                parent = parent.parentElement;
+            }
+
+
+            elementToCapture.style.cssText += `
+                padding: 20px !important; /* 為 PDF 內容增加一些內邊距 */
+                margin: 0 auto !important; /* 確保內容在 PDF 中居中 */
+                box-shadow: none !important; /* 移除陰影 */
+            `;
+          
+            showAppModal("生成PDF (Generating PDF)", "正在準備PDF文件，請稍候...<br>Preparing PDF document, please wait...");
+            window.scrollTo(0, 0); // 滾動到頂部
+          
+            setTimeout(() => { // 延遲以確保樣式應用和內容渲染完成
+              const opt = {
+                margin: [0.5, 0.5, 0.5, 0.5], // 上、右、下、左邊距 (英寸)
+                filename: '澳門噪音計算結果.pdf',
+                image: { type: 'jpeg', quality: 0.98 }, // 圖像質量
+                html2canvas: {
+                  scale: 2, // 提高清晰度
+                  useCORS: true, // 允許跨域圖像
+                  logging: false, // 可以設為 true 來調試
+                  scrollX: 0,
+                  scrollY: -window.scrollY, // 確保從頂部開始擷取
+                  windowWidth: document.documentElement.scrollWidth,
+                  windowHeight: document.documentElement.scrollHeight,
+                  letterRendering: true,
+                  removeContainer: true, // 移除 html2canvas 臨時創建的容器
+                   onclone: (document) => { // 在克隆 DOM 時，確保所有相關樣式都應用
+                        // 可以在這裡進一步操作克隆的文檔，例如確保 Tailwind 樣式被正確應用
+                    }
+                },
+                jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' }, // PDF 格式
+                pagebreak: { mode: ['avoid-all', 'css', 'legacy'] } // 分頁模式
+              };
+          
+              if (window.html2pdf) { // 確保 html2pdf 已加載
+                window.html2pdf().from(elementToCapture).set(opt).save()
+                  .then(() => {
+                    closeAppModal(); // 關閉“生成中”提示
+                  })
+                  .catch(err => {
+                    console.error("PDF Export Error:", err);
+                    closeAppModal();
+                    showAppModal('PDF 輸出錯誤 (PDF Export Error)', '無法生成PDF文件，請檢查控制台錯誤訊息或稍後再試。<br>Could not generate PDF file. Please check console for errors or try again later.');
+                  })
+                  .finally(() => {
+                    // 恢復原始樣式
+                    if (exportButtons) exportButtons.style.display = originalDisplayButtons;
+                    elementToCapture.style.cssText = originalElementStyleCssText;
+                    originalParentStyles.forEach(s => {
+                        s.el.style.overflow = s.overflow;
+                        s.el.style.height = s.height;
+                    });
+                  });
+              } else {
+                console.error("html2pdf.js is not loaded on window object");
+                closeAppModal();
+                showAppModal('PDF 輸出錯誤 (PDF Export Error)', 'PDF生成工具未能成功載入，請刷新頁面再試。<br>PDF generation tool failed to load. Please refresh and try again.');
+                // 恢復原始樣式
+                if (exportButtons) exportButtons.style.display = originalDisplayButtons;
+                elementToCapture.style.cssText = originalElementStyleCssText;
+                originalParentStyles.forEach(s => {
+                    s.el.style.overflow = s.overflow;
+                    s.el.style.height = s.height;
+                });
+              }
+            }, 750); // 增加延遲以確保所有內容（尤其是圖片和複雜樣式）都已渲染
+          };
+
+
+          return (
+            <div ref={pdfExportRootRef} className="max-w-3xl mx-auto bg-white shadow-lg rounded-lg overflow-hidden my-4 md:my-8"> {/* 主容器 */}
+              {/* 彈出框組件實例 */}
+              <Modal 
+                isOpen={modalInfo.isOpen} 
+                title={modalInfo.title} 
+                message={modalInfo.message} 
+                isHtmlMessage={modalInfo.isHtml}
+                onClose={closeAppModal} 
+              />
+              {/* 頁首 */}
+              <header className="bg-blue-600 text-white p-6">
+                <h1 className="text-2xl md:text-3xl font-bold text-center">澳門噪音計算器 (Macau Noise Calculator)</h1>
+              </header>
+
+              {/* 主內容區域 */}
+              <main id="pdfExportContent" className="p-4 md:p-6 space-y-6"> {/* id 用於 PDF 匯出 */}
+                {/* 分頁導航 */}
+                <div className="border-b border-gray-200">
+                  <nav className="-mb-px flex space-x-2 md:space-x-4" aria-label="Tabs">
+                    <button 
+                      className={`tab-button ${activeTab === 'checker' ? 'active' : ''}`}
+                      onClick={() => setActiveTab('checker')}
+                    >
+                      噪音檢查 (Noise Check)
+                    </button>
+                    <button 
+                      className={`tab-button ${activeTab === 'placement' ? 'active' : ''}`}
+                      onClick={() => setActiveTab('placement')}
+                    >
+                      儀器放置指引 (Placement Guide)
+                    </button>
+                  </nav>
+                </div>
+
+                {/* 根據 activeTab 顯示對應內容 */}
+                {activeTab === 'checker' && (
+                  <div id="checkerTabContent" className="tab-content space-y-6">
+                    <NoiseChecker 
+                        showModal={showAppModal} 
+                        setResultsHTML={setResultsHTML} 
+                        setExportButtonsVisible={setExportButtonsVisible}
+                    />
+                    {/* 結果顯示區域 */}
+                    {resultsHTML && (
+                      <div id="resultsArea" className="mt-6 p-4 border border-gray-200 rounded-md bg-gray-50" dangerouslySetInnerHTML={{ __html: resultsHTML }}></div>
+                    )}
+                    {/* 匯出按鈕區域 */}
+                    {exportButtonsVisible && (
+                      <div id="exportButtonsContainer" className="mt-6 text-center">
+                        <button 
+                          id="exportPdfBtn" 
+                          onClick={exportPDF} 
+                          className="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-md focus:outline-none focus:shadow-outline transition duration-150 ease-in-out text-sm sm:text-base"
+                        >
+                          輸出PDF (Export PDF)
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {activeTab === 'placement' && <PlacementGuide />}
+              </main>
+              <footer className="text-center text-xs text-gray-500 p-4 border-t border-gray-200">
+                <p>本工具僅供參考，所有噪音管制應以澳門現行有效法律為準。</p>
+                <p>This tool is for reference only. All noise control should be based on the current effective laws of Macau.</p>
+              </footer>
+            </div>
+          );
+        }
+
+        // 將 App 組件渲染到 root div 中
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
